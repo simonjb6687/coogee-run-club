@@ -2,7 +2,7 @@ const https = require('https');
 
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
-const GRAPHQL_URL = `https://${SHOPIFY_STORE}.myshopify.co/admin/api/2025-07/graphql.json`;
+const GRAPHQL_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-07/graphql.jsn`;
 const REST_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-07`;
 
 const RUN_MILESTONES = [25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
@@ -129,7 +129,7 @@ async function scrapeMember(barcode) {
 
 async function upsertMilestone(barcode, name, runCount, volunteerCount) {
   const handle = `milestone-${barcode.toLowerCase()}`;
-  const now = new Date().toISOString();
+  const now = new Date().toISOString().split('T')[0];
 
   const checkQuery = `{
     metaobjectByHandle(handle: { type: "parkrun_milestones", handle: "${handle}" }) {
