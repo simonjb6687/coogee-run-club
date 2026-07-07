@@ -2,8 +2,8 @@ const https = require('https');
 
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
-const GRAPHQL_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/graphql.json`;
-const REST_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2024-01`;
+const GRAPHQL_URL = `https://${SHOPIFY_STORE}.myshopify.co/admin/api/2025-07/graphql.json`;
+const REST_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-07`;
 
 const RUN_MILESTONES = [25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
 const VOLUNTEER_MILESTONES = [25, 50, 100, 150, 200, 250];
@@ -46,7 +46,7 @@ function graphqlRequest(query, variables = {}) {
 
 function httpGet(url) {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'CoogeeRunClub/1.0' } }, res => {
+    https.get(url, { headers: { 'User-Agent': 'CoogeeRunClub/1.0' }, rejectUnauthorized: false }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         httpGet(res.headers.location).then(resolve).catch(reject);
         return;
