@@ -1,5 +1,4 @@
 const https = require('https');
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
