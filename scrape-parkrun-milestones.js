@@ -1,12 +1,7 @@
 const https = require('https');
 
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
-const SHOPIFY_STORE_RAW = (process.env.SHOPIFY_STORE || '');
-const SHOPIFY_STORE = SHOPIFY_STORE_RAW
-  .replace(/^https?:\/\//i, '')
-  .replace(/\.myshopify\.com.*$/i, '')
-  .replace(/\/+$/, '')
-  .trim();
+const SHOPIFY_STORE = 'coogee-run-club';
 const GRAPHQL_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-10/graphql.json`;
 const REST_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-10`;
 
@@ -210,8 +205,7 @@ function getApproachingMilestones(name, barcode, runCount, volunteerCount) {
 
 async function main() {
   console.log('=== Parkrun Milestone Scraper ===');
-  console.log('DEBUG - Store (raw):', SHOPIFY_STORE_RAW);
-  console.log('DEBUG - Store (cleaned):', SHOPIFY_STORE);
+  console.log('DEBUG - Store:', SHOPIFY_STORE);
   console.log('DEBUG - GraphQL URL:', GRAPHQL_URL);
   console.log('DEBUG - Token exists:', !!SHOPIFY_ACCESS_TOKEN, 'length:', (SHOPIFY_ACCESS_TOKEN || '').length);
   console.log(`Started: ${new Date().toISOString()}\n`);
