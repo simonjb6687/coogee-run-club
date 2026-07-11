@@ -1,4 +1,5 @@
 const https = require('https');
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
@@ -30,6 +31,7 @@ function graphqlRequest(query, variables = {}) {
       let data = '';
       res.on('data', chunk => (data += chunk));
       res.on('end', () => {
+                  console.log('DEBUG - Response status:', res.statusCode, 'headers:', JSON.stringify(res.headers));
         if (res.statusCode !== 200) {
           reject(new Error(`Shopify returned HTTP ${res.statusCode}: ${data.substring(0, 200)}`));
           return;
