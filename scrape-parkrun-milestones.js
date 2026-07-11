@@ -1,8 +1,9 @@
 const https = require('https');
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
-const GRAPHQL_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-07/graphql.jsn`;
+const GRAPHQL_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-07/graphql.json`;
 const REST_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-07`;
 
 const RUN_MILESTONES = [25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
@@ -209,7 +210,7 @@ async function main() {
   if (alerts.length === 0) {
     console.log('No members approaching milestones.');
   } else {
-    for (const a of alerts) console.log(`  ð ${a}`);
+    for (const a of alerts) console.log(`  Ã°ÂÂÂ ${a}`);
   }
 
   console.log(`\nCompleted: ${new Date().toISOString()}`);
