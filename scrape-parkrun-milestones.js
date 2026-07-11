@@ -195,6 +195,9 @@ function getApproachingMilestones(name, barcode, runCount, volunteerCount) {
 
 async function main() {
   console.log('=== Parkrun Milestone Scraper ===');
+  console.log('DEBUG - Store:', SHOPIFY_STORE);
+  console.log('DEBUG - GraphQL URL:', GRAPHQL_URL);
+  console.log('DEBUG - Token exists:', !!SHOPIFY_ACCESS_TOKEN, 'length:', (SHOPIFY_ACCESS_TOKEN || '').length);
   console.log(`Started: ${new Date().toISOString()}\n`);
 
   const signups = await fetchAllSignups();
