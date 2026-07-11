@@ -3,8 +3,8 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
-const GRAPHQL_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2026-04/graphql.json`;
-const REST_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2026-04`;
+const GRAPHQL_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-10/graphql.json`;
+const REST_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-10`;
 
 const RUN_MILESTONES = [25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
 const VOLUNTEER_MILESTONES = [25, 50, 100, 150, 200, 250];
@@ -24,6 +24,7 @@ function graphqlRequest(query, variables = {}) {
       headers: {
         'Content-Type': 'application/json',
         'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN,
+        'User-Agent': 'CoogeeRunClub/1.0',
       },
     };
     const req = https.request(options, res => {
@@ -214,7 +215,7 @@ async function main() {
   if (alerts.length === 0) {
     console.log('No members approaching milestones.');
   } else {
-    for (const a of alerts) console.log(`  ÃÂ°ÃÂÃÂÃÂ ${a}`);
+    for (const a of alerts) console.log(`  ÃÂÃÂ°ÃÂÃÂÃÂÃÂÃÂÃÂ ${a}`);
   }
 
   console.log(`\nCompleted: ${new Date().toISOString()}`);
