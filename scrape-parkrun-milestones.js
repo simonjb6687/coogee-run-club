@@ -1,7 +1,12 @@
 const https = require('https');
 
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
-const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
+const SHOPIFY_STORE_RAW = (process.env.SHOPIFY_STORE || '');
+const SHOPIFY_STORE = SHOPIFY_STORE_RAW
+  .replace(/^https?:\/\//i, '')
+  .replace(/\.myshopify\.com.*$/i, '')
+  .replace(/\/+$/, '')
+  .trim();
 const GRAPHQL_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-10/graphql.json`;
 const REST_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-10`;
 
@@ -22,16 +27,18 @@ function graphqlRequest(query, variables = {}) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
         'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN,
         'User-Agent': 'CoogeeRunClub/1.0',
+        'Accept': 'application/json',
       },
-            rejectUnauthorized: false,
+      rejectUnauthorized: false,
     };
     const req = https.request(options, res => {
       let data = '';
       res.on('data', chunk => (data += chunk));
       res.on('end', () => {
-                  console.log('DEBUG - Response status:', res.statusCode, 'headers:', JSON.stringify(res.headers));
+        console.log('DEBUG - Response status:', res.statusCode, 'headers:', JSON.stringify(res.headers));
         if (res.statusCode !== 200) {
           reject(new Error(`Shopify returned HTTP ${res.statusCode}: ${data.substring(0, 200)}`));
           return;
@@ -53,7 +60,14 @@ function graphqlRequest(query, variables = {}) {
 
 function httpGet(url) {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'CoogeeRunClub/1.0' }, rejectUnauthorized: false }, res => {
+    const parsed = new URL(url);
+    const options = {
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      headers: { 'User-Agent': 'CoogeeRunClub/1.0' },
+      rejectUnauthorized: false,
+    };
+    https.get(options, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         httpGet(res.headers.location).then(resolve).catch(reject);
         return;
@@ -196,7 +210,8 @@ function getApproachingMilestones(name, barcode, runCount, volunteerCount) {
 
 async function main() {
   console.log('=== Parkrun Milestone Scraper ===');
-  console.log('DEBUG - Store:', SHOPIFY_STORE);
+  console.log('DEBUG - Store (raw):', SHOPIFY_STORE_RAW);
+  console.log('DEBUG - Store (cleaned):', SHOPIFY_STORE);
   console.log('DEBUG - GraphQL URL:', GRAPHQL_URL);
   console.log('DEBUG - Token exists:', !!SHOPIFY_ACCESS_TOKEN, 'length:', (SHOPIFY_ACCESS_TOKEN || '').length);
   console.log(`Started: ${new Date().toISOString()}\n`);
@@ -219,7 +234,7 @@ async function main() {
   if (alerts.length === 0) {
     console.log('No members approaching milestones.');
   } else {
-    for (const a of alerts) console.log(`  ÃÂÃÂ°ÃÂÃÂÃÂÃÂÃÂÃÂ ${a}`);
+    for (const a of alerts) console.log(`  \u{1F3C3} ${a}`);
   }
 
   console.log(`\nCompleted: ${new Date().toISOString()}`);
