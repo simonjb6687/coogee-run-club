@@ -33,7 +33,7 @@ function graphqlRequest(query, variables = {}) {
       let data = '';
       res.on('data', chunk => (data += chunk));
       res.on('end', () => {
-        console.log('DEBUG - Response status:', res.statusCode, 'headers:', JSON.stringify(res.headers));
+        if (res.statusCode !== 200) console.log('DEBUG - Response status:', res.statusCode);
         if (res.statusCode !== 200) {
           reject(new Error(`Shopify returned HTTP ${res.statusCode}: ${data.substring(0, 200)}`));
           return;
@@ -156,11 +156,11 @@ async function upsertMilestone(barcode, name, runCount, volunteerCount) {
   const existing = await graphqlRequest(checkQuery);
 
   const fields = [
-    { key: "member_name", value: JSON.stringify(name) },
-    { key: "parkrun_barcode", value: JSON.stringify(barcode) },
-    { key: "run_count", value: JSON.stringify(runCount) },
-    { key: "volunteer_count", value: JSON.stringify(volunteerCount) },
-    { key: "last_updated", value: JSON.stringify(now) },
+    { key: "member_name", value: name },
+    { key: "parkrun_barcode", value: barcode },
+    { key: "run_count", value: String(runCount) },
+    { key: "volunteer_count", value: String(volunteerCount) },
+    { key: "last_updated", value: now },
   ];
 
   if (existing.metaobjectByHandle) {
@@ -170,7 +170,13 @@ async function upsertMilestone(barcode, name, runCount, volunteerCount) {
         userErrors { field message }
       }
     }`;
-    await graphqlRequest(mutation, { id: existing.metaobjectByHandle.id, fields });
+    const result = await graphqlRequest(mutation, { id: existing.metaobjectByHandle.id, fields });
+    const errors = result.metaobjectUpdate?.userErrors || [];
+    if (errors.length > 0) {
+      console.error(`  Update errors for ${barcode}:`, JSON.stringify(errors));
+    } else {
+      console.log(`  Updated milestone for ${barcode}`);
+    }
   } else {
     const mutation = `mutation CreateMilestone($handle: String!, $fields: [MetaobjectFieldInput!]!) {
       metaobjectCreate(metaobject: {
@@ -182,7 +188,13 @@ async function upsertMilestone(barcode, name, runCount, volunteerCount) {
         userErrors { field message }
       }
     }`;
-    await graphqlRequest(mutation, { handle, fields });
+    const result = await graphqlRequest(mutation, { handle, fields });
+    const errors = result.metaobjectCreate?.userErrors || [];
+    if (errors.length > 0) {
+      console.error(`  Create errors for ${barcode}:`, JSON.stringify(errors));
+    } else {
+      console.log(`  Created milestone for ${barcode}`);
+    }
   }
 }
 
@@ -205,9 +217,7 @@ function getApproachingMilestones(name, barcode, runCount, volunteerCount) {
 
 async function main() {
   console.log('=== Parkrun Milestone Scraper ===');
-  console.log('DEBUG - Store:', SHOPIFY_STORE);
-  console.log('DEBUG - GraphQL URL:', GRAPHQL_URL);
-  console.log('DEBUG - Token exists:', !!SHOPIFY_ACCESS_TOKEN, 'length:', (SHOPIFY_ACCESS_TOKEN || '').length);
+  console.log(`Store: ${SHOPIFY_STORE} | Token: ${SHOPIFY_ACCESS_TOKEN ? 'set' : 'MISSING'}`);
   console.log(`Started: ${new Date().toISOString()}\n`);
 
   const signups = await fetchAllSignups();
