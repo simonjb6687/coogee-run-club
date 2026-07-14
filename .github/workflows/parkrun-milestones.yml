@@ -15,7 +15,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
+        run: npm install cheerio
 
       - name: Scrape parkrun milestones
         env:
