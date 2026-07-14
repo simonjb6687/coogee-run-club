@@ -5,6 +5,8 @@ const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE = 'coogee-run-club';
 const GRAPHQL_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2025-10/graphql.json`;
 
+const CLUB_PAGE_URL = 'https://www.parkrun.com.au/centennial/groups/47764/';
+
 const RUN_MILESTONES = [25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
 const VOLUNTEER_MILESTONES = [25, 50, 100, 150, 200, 250];
 
@@ -107,6 +109,38 @@ async function fetchAllSignups() {
   return barcodes;
 }
 
+async function fetchClubMembers() {
+  const members = new Map();
+  try {
+    const { statusCode, body } = await fetchPage(CLUB_PAGE_URL);
+    if (body.includes('Human Verification') || body.includes('awsWafCookieDomainList')) {
+      console.log('Club page blocked by WAF - skipping club member import');
+      return members;
+    }
+    if (statusCode !== 200) {
+      console.log(`Club page returned HTTP ${statusCode} - skipping club member import`);
+      return members;
+    }
+    const $ = cheerio.load(body);
+    $('table a[href*="/parkrunner/"]').each((_, el) => {
+      const href = $(el).attr('href');
+      const match = href.match(/\/parkrunner\/(\d+)/);
+      if (match) {
+        const barcode = `A${match[1]}`;
+        const rawName = $(el).text().trim();
+        const name = rawName.split(' ').map(w =>
+          w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+        ).join(' ');
+        members.set(barcode, name);
+      }
+    });
+    console.log(`Found ${members.size} members from club page`);
+  } catch (err) {
+    console.log(`Club page fetch error: ${err.message} - skipping club member import`);
+  }
+  return members;
+}
+
 function parseRunCount($) {
   let runCount = 0;
   $('h3').each((_, el) => {
@@ -147,6 +181,25 @@ function parseVolunteerCount($) {
   return volunteerCount;
 }
 
+function parseLastRunDate($) {
+  const tables = $('table#results');
+  if (tables.length === 0) return null;
+  const firstTable = tables.first();
+  const headers = [];
+  firstTable.find('th').each((_, el) => headers.push($(el).text().trim()));
+  const dateColIndex = headers.findIndex(h => /run\s*date/i.test(h));
+  if (dateColIndex < 0) return null;
+  const firstRow = firstTable.find('tbody tr').first();
+  if (!firstRow.length) return null;
+  const cells = [];
+  firstRow.find('td').each((_, el) => cells.push($(el).text().trim()));
+  const dateStr = cells[dateColIndex];
+  if (!dateStr) return null;
+  const match = dateStr.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (!match) return null;
+  return `${match[3]}-${match[2]}-${match[1]}`;
+}
+
 let workingApproach = -1;
 
 async function scrapeMember(barcode, isFirst) {
@@ -181,19 +234,20 @@ async function scrapeMember(barcode, isFirst) {
       const $ = cheerio.load(body);
       const runCount = parseRunCount($);
       const volunteerCount = parseVolunteerCount($);
+      const lastRunDate = parseLastRunDate($);
       if (workingApproach < 0) {
         workingApproach = approaches.indexOf(toTry[i]);
         console.log(`  Working approach: ${label}`);
       }
-      return { runCount, volunteerCount, blocked: false };
+      return { runCount, volunteerCount, lastRunDate, blocked: false };
     } catch (err) {
       if (isFirst) console.log(`  [${label}] Error: ${err.message}`);
     }
   }
-  return { runCount: 0, volunteerCount: 0, blocked: true };
+  return { runCount: 0, volunteerCount: 0, lastRunDate: null, blocked: true };
 }
 
-async function upsertMilestone(barcode, name, runCount, volunteerCount) {
+async function upsertMilestone(barcode, name, runCount, volunteerCount, lastRunDate) {
   const handle = `milestone-${barcode.toLowerCase()}`;
   const now = new Date().toISOString().split('T')[0];
   const checkQuery = `{
@@ -209,6 +263,9 @@ async function upsertMilestone(barcode, name, runCount, volunteerCount) {
     { key: "volunteer_count", value: String(volunteerCount) },
     { key: "last_updated", value: now },
   ];
+  if (lastRunDate) {
+    fields.push({ key: "last_run_date", value: lastRunDate });
+  }
   if (existing.metaobjectByHandle) {
     const mutation = `mutation UpdateMilestone($id: ID!, $fields: [MetaobjectFieldInput!]!) {
       metaobjectUpdate(id: $id, metaobject: { fields: $fields }) {
@@ -255,7 +312,20 @@ async function main() {
   console.log('=== Parkrun Milestone Scraper ===');
   console.log(`Store: ${SHOPIFY_STORE} | Token: ${SHOPIFY_ACCESS_TOKEN ? 'set' : 'MISSING'}`);
   console.log(`Started: ${new Date().toISOString()}\n`);
+
   const signups = await fetchAllSignups();
+
+  console.log('\nFetching club page members...');
+  const clubMembers = await fetchClubMembers();
+  let newFromClub = 0;
+  for (const [barcode, name] of clubMembers) {
+    if (!signups.has(barcode)) {
+      signups.set(barcode, name);
+      newFromClub++;
+    }
+  }
+  console.log(`Added ${newFromClub} new members from club page (total: ${signups.size})\n`);
+
   const alerts = [];
   let isFirst = true;
   let memberCount = 0;
@@ -278,17 +348,17 @@ async function main() {
       consecutiveBlocked = 0;
     }
     console.log(`Scraping ${name || barcode}... (${memberCount}/${signups.size})`);
-    let { runCount, volunteerCount, blocked } = await scrapeMember(barcode, isFirst);
+    let { runCount, volunteerCount, lastRunDate, blocked } = await scrapeMember(barcode, isFirst);
     isFirst = false;
     if (blocked) {
       console.log(`  Blocked - waiting 30s and retrying...`);
       await sleep(30000);
       workingApproach = -1;
-      ({ runCount, volunteerCount, blocked } = await scrapeMember(barcode, false));
+      ({ runCount, volunteerCount, lastRunDate, blocked } = await scrapeMember(barcode, false));
     }
-    console.log(`  Runs: ${runCount}, Volunteers: ${volunteerCount}${blocked ? ' (BLOCKED - skipping upsert)' : ''}`);
+    console.log(`  Runs: ${runCount}, Volunteers: ${volunteerCount}, Last Run: ${lastRunDate || 'N/A'}${blocked ? ' (BLOCKED - skipping upsert)' : ''}`);
     if (!blocked) {
-      await upsertMilestone(barcode, name, runCount, volunteerCount);
+      await upsertMilestone(barcode, name, runCount, volunteerCount, lastRunDate);
       alerts.push(...getApproachingMilestones(name, barcode, runCount, volunteerCount));
       consecutiveBlocked = 0;
     } else {
@@ -301,7 +371,7 @@ async function main() {
   console.log(`\nProcessed: ${memberCount} members, ${blockedCount} blocked`);
   console.log('\n=== Approaching Milestones ===');
   if (alerts.length === 0) console.log('No members approaching milestones.');
-  else for (const a of alerts) console.log(`  \u{1F3C3} ${a}`);
+  else for (const a of alerts) console.log(`  🏃 ${a}`);
   console.log(`\nCompleted: ${new Date().toISOString()}`);
 }
 
