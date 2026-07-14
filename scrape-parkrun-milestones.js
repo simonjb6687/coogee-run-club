@@ -1,5 +1,7 @@
 const https = require('https');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
 
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE = 'coogee-run-club';
@@ -107,7 +109,7 @@ async function scrapeMember(page, barcode, isFirst) {
     try {
       await page.waitForFunction(
         () => document.title !== 'Human Verification' && document.querySelector('h3'),
-        { timeout: 15000 }
+        { timeout: 30000 }
       );
     } catch {
       if (isFirst) console.log(`  DEBUG: page title after wait = "${await page.title()}"`);
@@ -228,12 +230,17 @@ async function main() {
 
   const browser = await puppeteer.launch({
     headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-blink-features=AutomationControlled',
+    ],
   });
   console.log('Browser launched');
 
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 800 });
+  await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
 
   const signups = await fetchAllSignups();
   const alerts = [];
