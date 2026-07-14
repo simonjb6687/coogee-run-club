@@ -258,17 +258,47 @@ async function main() {
   const signups = await fetchAllSignups();
   const alerts = [];
   let isFirst = true;
+  let memberCount = 0;
+  let blockedCount = 0;
+  let consecutiveBlocked = 0;
+  const BATCH_SIZE = 30;
+  const BATCH_COOLDOWN = 60000;
   for (const [barcode, name] of signups) {
-    console.log(`Scraping ${name || barcode}...`);
-    const { runCount, volunteerCount, blocked } = await scrapeMember(barcode, isFirst);
+    memberCount++;
+    if (memberCount > 1 && (memberCount - 1) % BATCH_SIZE === 0) {
+      console.log(`  --- Batch cooldown (60s) after ${memberCount - 1} members ---`);
+      await sleep(BATCH_COOLDOWN);
+      workingApproach = -1;
+      consecutiveBlocked = 0;
+    }
+    if (consecutiveBlocked >= 5) {
+      console.log(`  --- Extra cooldown (90s) after ${consecutiveBlocked} consecutive blocks ---`);
+      await sleep(90000);
+      workingApproach = -1;
+      consecutiveBlocked = 0;
+    }
+    console.log(`Scraping ${name || barcode}... (${memberCount}/${signups.size})`);
+    let { runCount, volunteerCount, blocked } = await scrapeMember(barcode, isFirst);
     isFirst = false;
+    if (blocked) {
+      console.log(`  Blocked - waiting 30s and retrying...`);
+      await sleep(30000);
+      workingApproach = -1;
+      ({ runCount, volunteerCount, blocked } = await scrapeMember(barcode, false));
+    }
     console.log(`  Runs: ${runCount}, Volunteers: ${volunteerCount}${blocked ? ' (BLOCKED - skipping upsert)' : ''}`);
     if (!blocked) {
       await upsertMilestone(barcode, name, runCount, volunteerCount);
       alerts.push(...getApproachingMilestones(name, barcode, runCount, volunteerCount));
+      consecutiveBlocked = 0;
+    } else {
+      blockedCount++;
+      consecutiveBlocked++;
     }
-    await sleep(1000);
+    const delay = 3000 + Math.floor(Math.random() * 2000);
+    await sleep(delay);
   }
+  console.log(`\nProcessed: ${memberCount} members, ${blockedCount} blocked`);
   console.log('\n=== Approaching Milestones ===');
   if (alerts.length === 0) console.log('No members approaching milestones.');
   else for (const a of alerts) console.log(`  \u{1F3C3} ${a}`);
