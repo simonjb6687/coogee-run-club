@@ -1,7 +1,5 @@
 const https = require('https');
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-puppeteer.use(StealthPlugin());
+const cheerio = require('cheerio');
 
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE = 'coogee-run-club';
@@ -13,6 +11,38 @@ const VOLUNTEER_MILESTONES = [25, 50, 100, 150, 200, 250];
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function httpGet(url) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const options = {
+      hostname: urlObj.hostname,
+      path: urlObj.pathname + urlObj.search,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'identity',
+      },
+      rejectUnauthorized: false,
+    };
+
+    https.get(options, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        let redirectUrl = res.headers.location;
+        if (redirectUrl.startsWith('/')) {
+          redirectUrl = `https://${urlObj.hostname}${redirectUrl}`;
+        }
+        httpGet(redirectUrl).then(resolve).catch(reject);
+        return;
+      }
+      let data = '';
+      res.on('data', chunk => (data += chunk));
+      res.on('end', () => resolve({ statusCode: res.statusCode, body: data }));
+    }).on('error', reject);
+  });
 }
 
 function graphqlRequest(query, variables = {}) {
@@ -100,51 +130,63 @@ async function fetchAllSignups() {
   return barcodes;
 }
 
-async function scrapeMember(page, barcode, isFirst) {
+async function scrapeMember(barcode, isFirst) {
   const numericBarcode = barcode.replace(/^A/i, '');
-  const url = `https://www.parkrun.com.au/parkrunner/${numericBarcode}/`;
-  try {
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+  const url = `https://www.parkrun.com.au/results/athleteresultshistory/?athleteNumber=${numericBarcode}`;
 
-    try {
-      await page.waitForFunction(
-        () => document.title !== 'Human Verification' && document.querySelector('h3'),
-        { timeout: 30000 }
-      );
-    } catch {
-      if (isFirst) console.log(`  DEBUG: page title after wait = "${await page.title()}"`);
-    }
+  try {
+    const { statusCode, body } = await httpGet(url);
 
     if (isFirst) {
-      const title = await page.title();
-      console.log(`  DEBUG page title: ${title}`);
-      const h3Count = await page.$$eval('h3', els => els.length);
-      console.log(`  DEBUG h3 count: ${h3Count}`);
-      const h3Texts = await page.$$eval('h3', els => els.map(e => e.textContent.trim()).slice(0, 5));
-      console.log(`  DEBUG h3 texts: ${JSON.stringify(h3Texts)}`);
+      console.log(`  DEBUG HTTP status: ${statusCode}`);
+      console.log(`  DEBUG body length: ${body.length}`);
+      const titleMatch = body.match(/<title>(.*?)<\/title>/i);
+      console.log(`  DEBUG page title: ${titleMatch ? titleMatch[1] : 'none'}`);
+      console.log(`  DEBUG has WAF: ${body.includes('Human Verification') || body.includes('awsWafCookieDomainList')}`);
     }
 
-    const result = await page.evaluate(() => {
-      let runCount = 0;
-      let volunteerCount = 0;
+    if (body.includes('Human Verification') || body.includes('awsWafCookieDomainList')) {
+      if (isFirst) console.log('  WAF challenge detected on results history page too');
+      return { runCount: 0, volunteerCount: 0 };
+    }
 
-      const h3s = document.querySelectorAll('h3');
-      for (const h3 of h3s) {
-        const match = h3.textContent.match(/(\d+)\s*parkruns?\s*total/i);
+    const $ = cheerio.load(body);
+
+    let runCount = 0;
+    const heading = $('#content h2').first().text();
+    if (heading) {
+      const match = heading.match(/(\d+)\s*parkruns?/i);
+      if (match) runCount = parseInt(match[1], 10);
+    }
+    if (runCount === 0) {
+      $('h3').each((i, el) => {
+        const text = $(el).text();
+        const match = text.match(/(\d+)\s*parkruns?\s*total/i);
         if (match) runCount = parseInt(match[1], 10);
-      }
+      });
+    }
+    if (isFirst) console.log(`  DEBUG heading text: "${heading}"`);
 
-      const tds = document.querySelectorAll('td');
-      for (let i = 0; i < tds.length; i++) {
-        if (tds[i].textContent.trim() === 'Total Credits' && tds[i + 1]) {
-          volunteerCount = parseInt(tds[i + 1].textContent.trim(), 10) || 0;
-        }
+    let volunteerCount = 0;
+    $('#volunteer-summary').next().find('tbody > tr').each((i, row) => {
+      const cells = $(row).find('td');
+      if (cells.length >= 3) {
+        volunteerCount += parseInt($(cells[2]).text().trim(), 10) || 0;
       }
-
-      return { runCount, volunteerCount };
     });
+    if (volunteerCount === 0) {
+      $('td').each((i, el) => {
+        const text = $(el).text().trim();
+        if (text === 'Total Credits' || text.includes('Total Credits')) {
+          const next = $(el).next();
+          if (next.length) {
+            volunteerCount = parseInt(next.text().trim(), 10) || 0;
+          }
+        }
+      });
+    }
 
-    return result;
+    return { runCount, volunteerCount };
   } catch (err) {
     console.error(`  Error scraping ${barcode}: ${err.message}`);
     return { runCount: 0, volunteerCount: 0 };
@@ -228,27 +270,13 @@ async function main() {
   console.log(`Store: ${SHOPIFY_STORE} | Token: ${SHOPIFY_ACCESS_TOKEN ? 'set' : 'MISSING'}`);
   console.log(`Started: ${new Date().toISOString()}\n`);
 
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-blink-features=AutomationControlled',
-    ],
-  });
-  console.log('Browser launched');
-
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 800 });
-  await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
-
   const signups = await fetchAllSignups();
   const alerts = [];
   let isFirst = true;
 
   for (const [barcode, name] of signups) {
     console.log(`Scraping ${name || barcode}...`);
-    const { runCount, volunteerCount } = await scrapeMember(page, barcode, isFirst);
+    const { runCount, volunteerCount } = await scrapeMember(barcode, isFirst);
     isFirst = false;
     console.log(`  Runs: ${runCount}, Volunteers: ${volunteerCount}`);
 
@@ -257,8 +285,6 @@ async function main() {
 
     await sleep(1000);
   }
-
-  await browser.close();
 
   console.log('\n=== Approaching Milestones ===');
   if (alerts.length === 0) {
