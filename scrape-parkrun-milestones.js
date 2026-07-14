@@ -59,7 +59,11 @@ function httpGet(url) {
     const options = {
       hostname: parsed.hostname,
       path: parsed.pathname + parsed.search,
-      headers: { 'User-Agent': 'CoogeeRunClub/1.0' },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
       rejectUnauthorized: false,
     };
     https.get(options, res => {
@@ -125,17 +129,26 @@ function parseParkrunProfile(html) {
   const runMatch = html.match(/<h3[^>]*>\s*(\d+)\s*parkruns?\s*total/i);
   if (runMatch) runCount = parseInt(runMatch[1], 10);
 
-  const volMatch = html.match(/Total\s+Credits[\s\S]*?<td[^>]*>\s*(\d+)\s*<\/td>/i);
+  const volMatch = html.match(/Total\s+Credits[\s\S]*?<td[^>]*>\s*(?:<[^>]+>\s*)*(\d+)/i);
   if (volMatch) volunteerCount = parseInt(volMatch[1], 10);
 
   return { runCount, volunteerCount };
 }
 
+let debugFirst = true;
 async function scrapeMember(barcode) {
   const numericBarcode = barcode.replace(/^A/i, '');
   const url = `https://www.parkrun.com.au/parkrunner/${numericBarcode}/`;
   try {
     const html = await httpGet(url);
+    if (debugFirst) {
+      debugFirst = false;
+      console.log(`  DEBUG html length: ${html.length}`);
+      console.log(`  DEBUG first 500 chars: ${html.substring(0, 500)}`);
+      const h3s = html.match(/<h3[^>]*>[^<]*<\/h3>/gi) || [];
+      console.log(`  DEBUG h3 tags found: ${h3s.length}`);
+      h3s.slice(0, 5).forEach(h => console.log(`    ${h}`));
+    }
     return parseParkrunProfile(html);
   } catch (err) {
     console.error(`  Error scraping ${barcode}: ${err.message}`);
