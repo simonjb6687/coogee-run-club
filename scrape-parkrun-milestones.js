@@ -358,8 +358,12 @@ async function main() {
     }
     console.log(`  Runs: ${runCount}, Volunteers: ${volunteerCount}, Last Run: ${lastRunDate || 'N/A'}${blocked ? ' (BLOCKED - skipping upsert)' : ''}`);
     if (!blocked) {
-      await upsertMilestone(barcode, name, runCount, volunteerCount, lastRunDate);
-      alerts.push(...getApproachingMilestones(name, barcode, runCount, volunteerCount));
+      if (runCount === 0 && volunteerCount === 0) {
+        console.log(`  Both counts are 0 - likely parsing failure, skipping upsert to protect existing data`);
+      } else {
+        await upsertMilestone(barcode, name, runCount, volunteerCount, lastRunDate);
+        alerts.push(...getApproachingMilestones(name, barcode, runCount, volunteerCount));
+      }
       consecutiveBlocked = 0;
     } else {
       blockedCount++;
