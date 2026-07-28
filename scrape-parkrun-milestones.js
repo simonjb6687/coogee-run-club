@@ -3,7 +3,7 @@ const cheerio = require('cheerio');
 
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE = 'coogee-run-club';
-const GRAPHQL_URL = `https://${SHOPIFY_STORE}myshopify.com/admin/api/2026-07/graphql.json`;
+const GRAPHQL_URL = `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2026-07/graphql.json`;
 
 const CLUB_PAGE_URL = 'https://www.parkrun.com.au/centennial/groups/47764/';
 
