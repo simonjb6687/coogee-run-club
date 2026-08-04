@@ -1,5 +1,7 @@
 const https = require('https');
-const cheerio = require('cheerio');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
 
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_STORE = 'coogee-run-club';
@@ -12,26 +14,6 @@ const VOLUNTEER_MILESTONES = [25, 50, 100, 150, 200, 250];
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function fetchPage(url) {
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-      'Accept-Language': 'en-AU,en-GB;q=0.9,en-US;q=0.8,en;q=0.7',
-      'Accept-Encoding': 'identity',
-      'Cache-Control': 'no-cache',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Sec-Fetch-User': '?1',
-      'Upgrade-Insecure-Requests': '1',
-    },
-    redirect: 'follow',
-  });
-  const body = await res.text();
-  return { statusCode: res.status, body };
 }
 
 function graphqlRequest(query, variables = {}) {
@@ -74,7 +56,6 @@ function graphqlRequest(query, variables = {}) {
     req.end();
   });
 }
-
 async function fetchAllSignups() {
   const barcodes = new Map();
   let cursor = null;
@@ -109,144 +90,122 @@ async function fetchAllSignups() {
   return barcodes;
 }
 
-async function fetchClubMembers() {
+async function fetchClubMembers(browser) {
   const members = new Map();
+  const page = await browser.newPage();
   try {
-    const { statusCode, body } = await fetchPage(CLUB_PAGE_URL);
-    if (body.includes('Human Verification') || body.includes('awsWafCookieDomainList')) {
-      console.log('Club page blocked by WAF - skipping club member import');
+    await page.goto(CLUB_PAGE_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+    await sleep(3000);
+    const html = await page.content();
+    if (html.includes('Human Verification') || html.includes('awsWafCookieDomainList')) {
+      console.log('Club page blocked by WAF even with Puppeteer - skipping club member import');
+      await page.close();
       return members;
     }
-    if (statusCode !== 200) {
-      console.log(`Club page returned HTTP ${statusCode} - skipping club member import`);
-      return members;
-    }
-    const $ = cheerio.load(body);
-    $('table a[href*="/parkrunner/"]').each((_, el) => {
-      const href = $(el).attr('href');
-      const match = href.match(/\/parkrunner\/(\d+)/);
-      if (match) {
-        const barcode = `A${match[1]}`;
-        const rawName = $(el).text().trim();
-        const name = rawName.split(' ').map(w =>
-          w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
-        ).join(' ');
-        members.set(barcode, name);
-      }
+    const extracted = await page.evaluate(() => {
+      const results = [];
+      document.querySelectorAll('table a[href*="/parkrunner/"]').forEach(el => {
+        const href = el.getAttribute('href');
+        const match = href.match(/\/parkrunner\/(\d+)/);
+        if (match) {
+          const barcode = 'A' + match[1];
+          const rawName = el.textContent.trim();
+          const name = rawName.split(' ').map(w =>
+            w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+          ).join(' ');
+          results.push({ barcode, name });
+        }
+      });
+      return results;
     });
+    for (const { barcode, name } of extracted) {
+      members.set(barcode, name);
+    }
     console.log(`Found ${members.size} members from club page`);
   } catch (err) {
     console.log(`Club page fetch error: ${err.message} - skipping club member import`);
   }
+  await page.close();
   return members;
 }
-
-function parseRunCount($) {
-  let runCount = 0;
-  $('h3').each((_, el) => {
-    const text = $(el).text();
-    const match = text.match(/(\d+)\s*parkruns?\s*total/i);
-    if (match) runCount = parseInt(match[1], 10);
-  });
-  if (runCount === 0) {
-    const heading = $('#content h2').first().text();
-    if (heading) {
-      const match = heading.match(/(\d+)\s*parkruns?/i);
-      if (match) runCount = parseInt(match[1], 10);
-    }
-  }
-  return runCount;
-}
-
-function parseVolunteerCount($) {
-  let volunteerCount = 0;
-  $('td').each((_, el) => {
-    const text = $(el).text().trim();
-    if (text === 'Total Credits' || text.includes('Total Credits')) {
-      const next = $(el).next();
-      if (next.length) {
-        volunteerCount = parseInt(next.text().trim(), 10) || 0;
-      }
-    }
-  });
-  if (volunteerCount === 0) {
-    const volTable = $('#volunteer-summary').next('table');
-    if (volTable.length) {
-      volTable.find('tfoot td').each((_, el) => {
-        const val = parseInt($(el).text().trim(), 10);
-        if (val > 0) volunteerCount = val;
-      });
-    }
-  }
-  return volunteerCount;
-}
-
-function parseLastRunDate($) {
-  const tables = $('table#results');
-  if (tables.length === 0) return null;
-  const firstTable = tables.first();
-  const headers = [];
-  firstTable.find('th').each((_, el) => headers.push($(el).text().trim()));
-  const dateColIndex = headers.findIndex(h => /run\s*date/i.test(h));
-  if (dateColIndex < 0) return null;
-  const firstRow = firstTable.find('tbody tr').first();
-  if (!firstRow.length) return null;
-  const cells = [];
-  firstRow.find('td').each((_, el) => cells.push($(el).text().trim()));
-  const dateStr = cells[dateColIndex];
-  if (!dateStr) return null;
-  const match = dateStr.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-  if (!match) return null;
-  return `${match[3]}-${match[2]}-${match[1]}`;
-}
-
-let workingApproach = -1;
-
-async function scrapeMember(barcode, isFirst) {
+async function scrapeMember(browser, barcode, memberNum, total) {
   const numericBarcode = barcode.replace(/^A/i, '');
-  const profileUrl = `https://www.parkrun.com.au/parkrunner/${numericBarcode}/`;
-
-  const approaches = [
-    { label: 'proxy', url: `https://api.allorigins.win/raw?url=${encodeURIComponent(profileUrl)}` },
-    { label: 'direct-au', url: profileUrl },
-    { label: 'direct-uk', url: `https://www.parkrun.org.uk/parkrunner/${numericBarcode}/` },
-  ];
-
-  const toTry = workingApproach >= 0 ? [approaches[workingApproach]] : approaches;
-
-  for (let i = 0; i < toTry.length; i++) {
-    const { label, url } = toTry[i];
-    try {
-      const { statusCode, body } = await fetchPage(url);
-      if (isFirst) {
-        const titleMatch = body.match(/<title>(.*?)<\/title>/i);
-        console.log(`  [${label}] ${url.substring(0, 100)}`);
-        console.log(`    status=${statusCode} len=${body.length} title="${titleMatch ? titleMatch[1] : 'none'}"`);
-      }
-      if (body.includes('Human Verification') || body.includes('awsWafCookieDomainList')) {
-        if (isFirst) console.log(`    WAF blocked`);
-        continue;
-      }
-      if (statusCode !== 200) {
-        if (isFirst) console.log(`    Non-200 status`);
-        continue;
-      }
-      const $ = cheerio.load(body);
-      const runCount = parseRunCount($);
-      const volunteerCount = parseVolunteerCount($);
-      const lastRunDate = parseLastRunDate($);
-      if (workingApproach < 0) {
-        workingApproach = approaches.indexOf(toTry[i]);
-        console.log(`  Working approach: ${label}`);
-      }
-      return { runCount, volunteerCount, lastRunDate, blocked: false };
-    } catch (err) {
-      if (isFirst) console.log(`  [${label}] Error: ${err.message}`);
+  const profileUrl = `https://www.parkrun.com.au/parkrunner/${numericBarcode}/all/`;
+  const page = await browser.newPage();
+  try {
+    await page.goto(profileUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+    await sleep(2000);
+    const html = await page.content();
+    if (html.includes('Human Verification') || html.includes('awsWafCookieDomainList')) {
+      if (memberNum <= 3) console.log(`  WAF blocked on Puppeteer for ${barcode}`);
+      await page.close();
+      return { runCount: 0, volunteerCount: 0, lastRunDate: null, blocked: true };
     }
+    const data = await page.evaluate(() => {
+      let runCount = 0;
+      let volunteerCount = 0;
+      let lastRunDate = null;
+      document.querySelectorAll('h3').forEach(el => {
+        const text = el.textContent;
+        const match = text.match(/(\d+)\s*parkruns?\s*total/i);
+        if (match) runCount = parseInt(match[1], 10);
+      });
+      if (runCount === 0) {
+        const h2 = document.querySelector('#content h2');
+        if (h2) {
+          const match = h2.textContent.match(/(\d+)\s*parkruns?/i);
+          if (match) runCount = parseInt(match[1], 10);
+        }
+      }
+      document.querySelectorAll('td').forEach(el => {
+        const text = el.textContent.trim();
+        if (text === 'Total Credits' || text.includes('Total Credits')) {
+          const next = el.nextElementSibling;
+          if (next) {
+            volunteerCount = parseInt(next.textContent.trim(), 10) || 0;
+          }
+        }
+      });
+      if (volunteerCount === 0) {
+        const volTable = document.querySelector('#volunteer-summary');
+        if (volTable) {
+          const table = volTable.nextElementSibling;
+          if (table && table.tagName === 'TABLE') {
+            table.querySelectorAll('tfoot td').forEach(el => {
+              const val = parseInt(el.textContent.trim(), 10);
+              if (val > 0) volunteerCount = val;
+            });
+          }
+        }
+      }
+      const resultsTable = document.querySelector('table#results');
+      if (resultsTable) {
+        const headers = [];
+        resultsTable.querySelectorAll('th').forEach(el => headers.push(el.textContent.trim()));
+        const dateColIndex = headers.findIndex(h => /run\s*date/i.test(h));
+        if (dateColIndex >= 0) {
+          const firstRow = resultsTable.querySelector('tbody tr');
+          if (firstRow) {
+            const cells = [];
+            firstRow.querySelectorAll('td').forEach(el => cells.push(el.textContent.trim()));
+            const dateStr = cells[dateColIndex];
+            if (dateStr) {
+              const match = dateStr.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+              if (match) lastRunDate = `${match[3]}-${match[2]}-${match[1]}`;
+            }
+          }
+        }
+      }
+      return { runCount, volunteerCount, lastRunDate };
+    });
+    await page.close();
+    return { ...data, blocked: false };
+  } catch (err) {
+    console.log(`  Error scraping ${barcode}: ${err.message}`);
+    await page.close();
+    return { runCount: 0, volunteerCount: 0, lastRunDate: null, blocked: true };
   }
-  return { runCount: 0, volunteerCount: 0, lastRunDate: null, blocked: true };
 }
-
 async function upsertMilestone(barcode, name, runCount, volunteerCount, lastRunDate) {
   const handle = `milestone-${barcode.toLowerCase()}`;
   const now = new Date().toISOString().split('T')[0];
@@ -294,7 +253,6 @@ async function upsertMilestone(barcode, name, runCount, volunteerCount, lastRunD
     else console.log(`  Created milestone for ${barcode}`);
   }
 }
-
 function getApproachingMilestones(name, barcode, runCount, volunteerCount) {
   const alerts = [];
   for (const m of RUN_MILESTONES) {
@@ -309,14 +267,28 @@ function getApproachingMilestones(name, barcode, runCount, volunteerCount) {
 }
 
 async function main() {
-  console.log('=== Parkrun Milestone Scraper ===');
+  console.log('=== Parkrun Milestone Scraper (Puppeteer) ===');
   console.log(`Store: ${SHOPIFY_STORE} | Token: ${SHOPIFY_ACCESS_TOKEN ? 'set' : 'MISSING'}`);
   console.log(`Started: ${new Date().toISOString()}\n`);
 
   const signups = await fetchAllSignups();
 
+  console.log('\nLaunching browser...');
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu',
+      '--window-size=1920,1080',
+    ],
+  });
+  console.log('Browser launched');
+
   console.log('\nFetching club page members...');
-  const clubMembers = await fetchClubMembers();
+  const clubMembers = await fetchClubMembers(browser);
   let newFromClub = 0;
   for (const [barcode, name] of clubMembers) {
     if (!signups.has(barcode)) {
@@ -325,11 +297,10 @@ async function main() {
     }
   }
   console.log(`Added ${newFromClub} new members from club page (total: ${signups.size})\n`);
-
   const alerts = [];
-  let isFirst = true;
   let memberCount = 0;
   let blockedCount = 0;
+  let updatedCount = 0;
   let consecutiveBlocked = 0;
   const BATCH_SIZE = 30;
   const BATCH_COOLDOWN = 60000;
@@ -338,23 +309,19 @@ async function main() {
     if (memberCount > 1 && (memberCount - 1) % BATCH_SIZE === 0) {
       console.log(`  --- Batch cooldown (60s) after ${memberCount - 1} members ---`);
       await sleep(BATCH_COOLDOWN);
-      workingApproach = -1;
       consecutiveBlocked = 0;
     }
-    if (consecutiveBlocked >= 5) {
-      console.log(`  --- Extra cooldown (90s) after ${consecutiveBlocked} consecutive blocks ---`);
-      await sleep(90000);
-      workingApproach = -1;
+    if (consecutiveBlocked >= 10) {
+      console.log(`  --- Extra cooldown (120s) after ${consecutiveBlocked} consecutive blocks ---`);
+      await sleep(120000);
       consecutiveBlocked = 0;
     }
     console.log(`Scraping ${name || barcode}... (${memberCount}/${signups.size})`);
-    let { runCount, volunteerCount, lastRunDate, blocked } = await scrapeMember(barcode, isFirst);
-    isFirst = false;
+    let { runCount, volunteerCount, lastRunDate, blocked } = await scrapeMember(browser, barcode, memberCount, signups.size);
     if (blocked) {
-      console.log(`  Blocked - waiting 30s and retrying...`);
-      await sleep(30000);
-      workingApproach = -1;
-      ({ runCount, volunteerCount, lastRunDate, blocked } = await scrapeMember(barcode, false));
+      console.log(`  Blocked - waiting 45s and retrying...`);
+      await sleep(45000);
+      ({ runCount, volunteerCount, lastRunDate, blocked } = await scrapeMember(browser, barcode, memberCount, signups.size));
     }
     console.log(`  Runs: ${runCount}, Volunteers: ${volunteerCount}, Last Run: ${lastRunDate || 'N/A'}${blocked ? ' (BLOCKED - skipping upsert)' : ''}`);
     if (!blocked) {
@@ -363,6 +330,7 @@ async function main() {
       } else {
         await upsertMilestone(barcode, name, runCount, volunteerCount, lastRunDate);
         alerts.push(...getApproachingMilestones(name, barcode, runCount, volunteerCount));
+        updatedCount++;
       }
       consecutiveBlocked = 0;
     } else {
@@ -372,10 +340,11 @@ async function main() {
     const delay = 3000 + Math.floor(Math.random() * 2000);
     await sleep(delay);
   }
-  console.log(`\nProcessed: ${memberCount} members, ${blockedCount} blocked`);
+  await browser.close();
+  console.log(`\nProcessed: ${memberCount} members, ${updatedCount} updated, ${blockedCount} blocked`);
   console.log('\n=== Approaching Milestones ===');
   if (alerts.length === 0) console.log('No members approaching milestones.');
-  else for (const a of alerts) console.log(`  🏃 ${a}`);
+  else for (const a of alerts) console.log(` \u{1F3C3} ${a}`);
   console.log(`\nCompleted: ${new Date().toISOString()}`);
 }
 
