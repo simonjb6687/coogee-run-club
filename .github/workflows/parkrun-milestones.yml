@@ -8,6 +8,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,7 +16,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install cheerio
+        run: npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
 
       - name: Scrape parkrun milestones
         env:
