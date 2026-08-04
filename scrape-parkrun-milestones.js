@@ -12,10 +12,38 @@ const CLUB_PAGE_URL = 'https://www.parkrun.com.au/centennial/groups/47764/';
 const RUN_MILESTONES = [25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
 const VOLUNTEER_MILESTONES = [25, 50, 100, 150, 200, 250];
 
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
+  'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:128.0) Gecko/20100101 Firefox/128.0',
+];
+
+const VIEWPORTS = [
+  { width: 1920, height: 1080 },
+  { width: 1536, height: 864 },
+  { width: 1440, height: 900 },
+  { width: 1366, height: 768 },
+  { width: 1280, height: 720 },
+];
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function randomDelay(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function randomElement(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 function graphqlRequest(query, variables = {}) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ query, variables });
@@ -37,7 +65,6 @@ function graphqlRequest(query, variables = {}) {
       let data = '';
       res.on('data', chunk => (data += chunk));
       res.on('end', () => {
-        if (res.statusCode !== 200) console.log('DEBUG - Response status:', res.statusCode);
         if (res.statusCode !== 200) {
           reject(new Error(`Shopify returned HTTP ${res.statusCode}: ${data.substring(0, 200)}`));
           return;
@@ -56,6 +83,7 @@ function graphqlRequest(query, variables = {}) {
     req.end();
   });
 }
+
 async function fetchAllSignups() {
   const barcodes = new Map();
   let cursor = null;
@@ -90,57 +118,39 @@ async function fetchAllSignups() {
   return barcodes;
 }
 
-async function fetchClubMembers(browser) {
-  const members = new Map();
-  const page = await browser.newPage();
-  try {
-    await page.goto(CLUB_PAGE_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-    await sleep(3000);
-    const html = await page.content();
-    if (html.includes('Human Verification') || html.includes('awsWafCookieDomainList')) {
-      console.log('Club page blocked by WAF even with Puppeteer - skipping club member import');
-      await page.close();
-      return members;
-    }
-    const extracted = await page.evaluate(() => {
-      const results = [];
-      document.querySelectorAll('table a[href*="/parkrunner/"]').forEach(el => {
-        const href = el.getAttribute('href');
-        const match = href.match(/\/parkrunner\/(\d+)/);
-        if (match) {
-          const barcode = 'A' + match[1];
-          const rawName = el.textContent.trim();
-          const name = rawName.split(' ').map(w =>
-            w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
-          ).join(' ');
-          results.push({ barcode, name });
-        }
-      });
-      return results;
-    });
-    for (const { barcode, name } of extracted) {
-      members.set(barcode, name);
-    }
-    console.log(`Found ${members.size} members from club page`);
-  } catch (err) {
-    console.log(`Club page fetch error: ${err.message} - skipping club member import`);
-  }
-  await page.close();
-  return members;
-}
 async function scrapeMember(browser, barcode, memberNum, total) {
   const numericBarcode = barcode.replace(/^A/i, '');
   const profileUrl = `https://www.parkrun.com.au/parkrunner/${numericBarcode}/all/`;
-  const page = await browser.newPage();
+
+  const context = await browser.createBrowserContext();
+  const page = await context.newPage();
+
+  const ua = randomElement(USER_AGENTS);
+  const vp = randomElement(VIEWPORTS);
+  await page.setUserAgent(ua);
+  await page.setViewport(vp);
+  await page.setExtraHTTPHeaders({
+    'Accept-Language': 'en-AU,en;q=0.9',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
+  });
+
   try {
     await page.goto(profileUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-    await sleep(2000);
+    await sleep(randomDelay(1000, 3000));
+
     const html = await page.content();
     if (html.includes('Human Verification') || html.includes('awsWafCookieDomainList')) {
-      if (memberNum <= 3) console.log(`  WAF blocked on Puppeteer for ${barcode}`);
+      if (memberNum <= 3) console.log(`  WAF blocked for ${barcode}`);
       await page.close();
+      await context.close();
       return { runCount: 0, volunteerCount: 0, lastRunDate: null, blocked: true };
     }
+
     const data = await page.evaluate(() => {
       let runCount = 0;
       let volunteerCount = 0;
@@ -161,9 +171,7 @@ async function scrapeMember(browser, barcode, memberNum, total) {
         const text = el.textContent.trim();
         if (text === 'Total Credits' || text.includes('Total Credits')) {
           const next = el.nextElementSibling;
-          if (next) {
-            volunteerCount = parseInt(next.textContent.trim(), 10) || 0;
-          }
+          if (next) volunteerCount = parseInt(next.textContent.trim(), 10) || 0;
         }
       });
       if (volunteerCount === 0) {
@@ -198,14 +206,18 @@ async function scrapeMember(browser, barcode, memberNum, total) {
       }
       return { runCount, volunteerCount, lastRunDate };
     });
+
     await page.close();
+    await context.close();
     return { ...data, blocked: false };
   } catch (err) {
     console.log(`  Error scraping ${barcode}: ${err.message}`);
-    await page.close();
+    try { await page.close(); } catch (_) {}
+    try { await context.close(); } catch (_) {}
     return { runCount: 0, volunteerCount: 0, lastRunDate: null, blocked: true };
   }
 }
+
 async function upsertMilestone(barcode, name, runCount, volunteerCount, lastRunDate) {
   const handle = `milestone-${barcode.toLowerCase()}`;
   const now = new Date().toISOString().split('T')[0];
@@ -253,6 +265,7 @@ async function upsertMilestone(barcode, name, runCount, volunteerCount, lastRunD
     else console.log(`  Created milestone for ${barcode}`);
   }
 }
+
 function getApproachingMilestones(name, barcode, runCount, volunteerCount) {
   const alerts = [];
   for (const m of RUN_MILESTONES) {
@@ -267,7 +280,7 @@ function getApproachingMilestones(name, barcode, runCount, volunteerCount) {
 }
 
 async function main() {
-  console.log('=== Parkrun Milestone Scraper (Puppeteer) ===');
+  console.log('=== Parkrun Milestone Scraper (Fresh Context) ===');
   console.log(`Store: ${SHOPIFY_STORE} | Token: ${SHOPIFY_ACCESS_TOKEN ? 'set' : 'MISSING'}`);
   console.log(`Started: ${new Date().toISOString()}\n`);
 
@@ -285,48 +298,45 @@ async function main() {
       '--window-size=1920,1080',
     ],
   });
-  console.log('Browser launched');
+  console.log('Browser launched\n');
 
-  console.log('\nFetching club page members...');
-  const clubMembers = await fetchClubMembers(browser);
-  let newFromClub = 0;
-  for (const [barcode, name] of clubMembers) {
-    if (!signups.has(barcode)) {
-      signups.set(barcode, name);
-      newFromClub++;
-    }
-  }
-  console.log(`Added ${newFromClub} new members from club page (total: ${signups.size})\n`);
   const alerts = [];
   let memberCount = 0;
   let blockedCount = 0;
   let updatedCount = 0;
   let consecutiveBlocked = 0;
-  const BATCH_SIZE = 30;
-  const BATCH_COOLDOWN = 60000;
+
   for (const [barcode, name] of signups) {
     memberCount++;
-    if (memberCount > 1 && (memberCount - 1) % BATCH_SIZE === 0) {
-      console.log(`  --- Batch cooldown (60s) after ${memberCount - 1} members ---`);
-      await sleep(BATCH_COOLDOWN);
-      consecutiveBlocked = 0;
+
+    const delay = randomDelay(3000, 8000);
+    if (memberCount > 1) {
+      console.log(`  Waiting ${(delay/1000).toFixed(1)}s...`);
+      await sleep(delay);
     }
+
     if (consecutiveBlocked >= 10) {
-      console.log(`  --- Extra cooldown (120s) after ${consecutiveBlocked} consecutive blocks ---`);
-      await sleep(120000);
+      const extraWait = randomDelay(120000, 180000);
+      console.log(`  --- Extra cooldown (${(extraWait/1000).toFixed(0)}s) after ${consecutiveBlocked} consecutive blocks ---`);
+      await sleep(extraWait);
       consecutiveBlocked = 0;
     }
+
     console.log(`Scraping ${name || barcode}... (${memberCount}/${signups.size})`);
     let { runCount, volunteerCount, lastRunDate, blocked } = await scrapeMember(browser, barcode, memberCount, signups.size);
+
     if (blocked) {
-      console.log(`  Blocked - waiting 45s and retrying...`);
-      await sleep(45000);
+      const retryWait = randomDelay(30000, 60000);
+      console.log(`  Blocked - waiting ${(retryWait/1000).toFixed(0)}s and retrying with new context...`);
+      await sleep(retryWait);
       ({ runCount, volunteerCount, lastRunDate, blocked } = await scrapeMember(browser, barcode, memberCount, signups.size));
     }
-    console.log(`  Runs: ${runCount}, Volunteers: ${volunteerCount}, Last Run: ${lastRunDate || 'N/A'}${blocked ? ' (BLOCKED - skipping upsert)' : ''}`);
+
+    console.log(`  Runs: ${runCount}, Volunteers: ${volunteerCount}, Last Run: ${lastRunDate || 'N/A'}${blocked ? ' (BLOCKED)' : ''}`);
+
     if (!blocked) {
       if (runCount === 0 && volunteerCount === 0) {
-        console.log(`  Both counts are 0 - likely parsing failure, skipping upsert to protect existing data`);
+        console.log(`  Both counts 0 - skipping upsert to protect existing data`);
       } else {
         await upsertMilestone(barcode, name, runCount, volunteerCount, lastRunDate);
         alerts.push(...getApproachingMilestones(name, barcode, runCount, volunteerCount));
@@ -337,14 +347,22 @@ async function main() {
       blockedCount++;
       consecutiveBlocked++;
     }
-    const delay = 3000 + Math.floor(Math.random() * 2000);
-    await sleep(delay);
   }
+
   await browser.close();
-  console.log(`\nProcessed: ${memberCount} members, ${updatedCount} updated, ${blockedCount} blocked`);
+
+  console.log(`\n=== Results ===`);
+  console.log(`Processed: ${memberCount} | Updated: ${updatedCount} | Blocked: ${blockedCount}`);
+
+  if (blockedCount === memberCount) {
+    console.log('\nERROR: Every member was blocked by WAF. No data was updated.');
+    process.exit(1);
+  }
+
   console.log('\n=== Approaching Milestones ===');
   if (alerts.length === 0) console.log('No members approaching milestones.');
-  else for (const a of alerts) console.log(` \u{1F3C3} ${a}`);
+  else for (const a of alerts) console.log(` ${a}`);
+
   console.log(`\nCompleted: ${new Date().toISOString()}`);
 }
 
