@@ -8,18 +8,17 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: Install dependencies
-        run: npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
-
       - name: Scrape parkrun milestones
         env:
           SHOPIFY_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          PARKRUN_ATHLETE_ID: ${{ secrets.PARKRUN_ATHLETE_ID }}
+          PARKRUN_PASSWORD: ${{ secrets.PARKRUN_PASSWORD }}
         run: node scrape-parkrun-milestones.js
